@@ -11,7 +11,11 @@ public final class Elevator extends Thread {
 
     private final ReentrantLock lock = new ReentrantLock(true);
     private ElevatorState state;
+    //кто сейчас внутри лифта
+    private final Set<String> passengers = new HashSet<>();
 
+    // этаж список внешних заявок люди ждут лифт на этаже
+    private final Map<Integer, List<HallRequest>> hallRequestsByFloor = new HashMap<>();
     private final Object wakeMonitor = new Object();
 
     public Elevator(int elevatorId, int startFloor) {
@@ -43,6 +47,26 @@ public final class Elevator extends Thread {
         wakeUp();
     }
 
+
+    public void registerHallRequest(HallRequest req) {
+        lock.lock();
+        try {
+            hallRequestsByFloor.computeIfAbsent(req.floor, f -> new ArrayList<>()).add(req);
+        } finally {
+            lock.unlock();
+        }
+        wakeUp();
+    }
+
+    public void passengerExit(String passengerId) {
+        lock.lock();
+        try {
+            passengers.remove(passengerId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private void wakeUp() {
         synchronized (wakeMonitor) {
             wakeMonitor.notifyAll();
@@ -52,11 +76,14 @@ public final class Elevator extends Thread {
     private Set<Integer> allPendingFloors() {
         lock.lock();
         try {
-            return new HashSet<>(state.targets);
+            Set<Integer> floors = new HashSet<>(state.targets);
+            floors.addAll(hallRequestsByFloor.keySet());
+            return floors;
         } finally {
             lock.unlock();
         }
     }
+
 
     // смотрим вперед по направлению, если там нет целей - разворачиваемся
     private Integer nextDestinationLook() {
@@ -146,7 +173,18 @@ public final class Elevator extends Thread {
         Logger.logLine("Местонахождение", "лифт", id, "этаж", curr);
     }
 
-    private void openCloseDoorsStub() {
+    private boolean shouldStopHere(int floor) {
+        lock.lock();
+        try {
+            if (state.targets.contains(floor)) return true;
+            return hallRequestsByFloor.containsKey(floor);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+
+    private void openCloseDoorsAndService() {
         int floor;
 
         lock.lock();
@@ -160,16 +198,61 @@ public final class Elevator extends Thread {
         Logger.logLine("Двери открыты", "лифт", id, "этаж", floor);
         sleepSec(Config.DOOR_OPEN_TIME);
 
-        Logger.logLine("Двери закрываются", "лифт", id, "этаж", floor);
-        sleepSec(Config.DOOR_CLOSE_TIME);
+        //подбор ожидающих пассажиров
+        List<HallRequest> picked;
 
-        // удаляем текущий этаж из целей если он был целью
+        lock.lock();
+        try {
+            List<HallRequest> waiting = hallRequestsByFloor.remove(floor);
+            if (waiting == null) waiting = new ArrayList<>();
+
+            int free = capacity - passengers.size();
+            int canTake = Math.max(0, free);
+
+            picked = new ArrayList<>();
+            List<HallRequest> notPicked = new ArrayList<>();
+
+            for (int i = 0; i < waiting.size(); i++) {
+                if (i < canTake) picked.add(waiting.get(i));
+                else notPicked.add(waiting.get(i));
+            }
+
+            if (!notPicked.isEmpty()) {
+                hallRequestsByFloor.computeIfAbsent(floor, f -> new ArrayList<>()).addAll(notPicked);
+            }
+        } finally {
+            lock.unlock();
+        }
+
+        for (HallRequest req : picked) {
+            lock.lock();
+            try {
+                passengers.add(req.passengerId);
+            } finally {
+                lock.unlock();
+            }
+            req.pickedUp.countDown();
+            Logger.logLine("Посадка", "лифт", id, "этаж", floor, "пас", req.passengerId.substring(0, 4));
+        }
+
+        //удаляем текущий этаж из целей если он там был
         lock.lock();
         try {
             ArrayDeque<Integer> newTargets = new ArrayDeque<>();
-            for (int t : state.targets) if (t != floor) newTargets.addLast(t);
+            for (int t : state.targets) {
+                if (t != floor) newTargets.addLast(t);
+            }
+            state = new ElevatorState(state.currentFloor, state.direction, state.status, newTargets);
+        } finally {
+            lock.unlock();
+        }
 
-            state = new ElevatorState(state.currentFloor, state.direction, ElevatorStatus.IDLE, newTargets);
+        Logger.logLine("Двери закрываются", "лифт", id, "этаж", floor);
+        sleepSec(Config.DOOR_CLOSE_TIME);
+
+        lock.lock();
+        try {
+            state = new ElevatorState(state.currentFloor, state.direction, ElevatorStatus.IDLE, state.targets);
         } finally {
             lock.unlock();
         }
@@ -211,17 +294,37 @@ public final class Elevator extends Thread {
 
             int curr = getStateSnapshot().currentFloor;
             if (curr == dest) {
-                openCloseDoorsStub();
+                if (shouldStopHere(curr)) {
+                    openCloseDoorsAndService();
+                } else {
+                    lock.lock();
+                    try {
+                        state = new ElevatorState(state.currentFloor, Direction.IDLE, state.status, state.targets);
+                    } finally {
+                        lock.unlock();
+                    }
+                }
                 continue;
             }
 
             while (true) {
                 curr = getStateSnapshot().currentFloor;
                 if (curr == dest) break;
+
                 moveOneFloor();
+                curr = getStateSnapshot().currentFloor;
+
+                if (shouldStopHere(curr)) {
+                    openCloseDoorsAndService();
+
+                    Integer newDest = nextDestinationLook();
+                    if (newDest == null) break;
+
+                    dest = newDest;
+                    setDirectionTowards(dest);
+                }
             }
 
-            openCloseDoorsStub();
         }
     }
 }
