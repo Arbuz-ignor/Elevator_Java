@@ -14,4 +14,13 @@ public enum Direction {
     public int step() {
         return step;
     }
+
+    @Override
+    public String toString() {
+        return switch (this) {
+            case UP -> "вверх";
+            case DOWN -> "вниз";
+            case IDLE -> "стоит";
+        };
+    }
 }

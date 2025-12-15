@@ -33,7 +33,11 @@ public final class Dispatcher extends Thread {
         int dist = Math.abs(curr - reqFloor);
 
         double score = (double) dist;
-
+        // небольшой штраф за уже набранные цели и загрузку чтобы не забивать один лифт
+        int targets = st.targets.size();
+        int load = elevator.getLoad();
+        score += targets * 1.5;
+        if (elevator.isFull()) score += 100;
         if (st.status == ElevatorStatus.IDLE) {
             //ничего не добавляем, просто dist
             score *= 1.0;
@@ -65,7 +69,7 @@ public final class Dispatcher extends Thread {
     }
 
     private void handleHall(HallRequest req) {
-        Logger.logLine("Поступил вызов", "номер", req.номер, "этаж", req.floor, "напр", req.direction.name());
+        Logger.logLine("Поступил запрос", "номер", req.номер, "этаж", req.floor, "направление", req.direction);
 
         try {
             Elevator elevator = chooseElevator(req.floor, req.direction);
@@ -76,7 +80,7 @@ public final class Dispatcher extends Thread {
             // сигнал пассажиру лифт назначен
             req.assignedEvent.countDown();
 
-            Logger.logLine("Назначение лифта", "номер", req.номер, "лифт", elevator.id, "этаж", req.floor);
+            Logger.logLine("Лифт назначен", "номер", req.номер, "лифт", elevator.id, "этаж", req.floor);
         } catch (Exception e) {
             Logger.logLine("Ошибка диспетчера", "err", String.valueOf(e));
             req.assignedEvent.countDown(); // чтобы пассажир не завис навсегда
@@ -84,7 +88,7 @@ public final class Dispatcher extends Thread {
     }
 
     private void handleCar(CarRequest req) {
-        Logger.logLine("Внутр. цель", "лифт", req.elevatorId, "цель", req.targetFloor, "номер", req.номер);
+        Logger.logLine("Запрос из лифта", "лифт", req.elevatorId, "этаж", req.targetFloor, "номер", req.номер);
 
         Elevator elevator = byId.get(req.elevatorId);
         if (elevator != null) {

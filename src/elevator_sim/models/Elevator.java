@@ -22,7 +22,7 @@ public final class Elevator extends Thread {
     private final Object wakeMonitor = new Object();
 
     public Elevator(int elevatorId, int startFloor) {
-        super("Лифт-" + elevatorId);
+        super("Лифт №" + elevatorId);
         setDaemon(true);
 
         id = elevatorId;
@@ -38,6 +38,19 @@ public final class Elevator extends Thread {
         } finally {
             lock.unlock();
         }
+    }
+    // текущая загрузка сколько пассажиров внутри
+    public int getLoad() {
+        lock.lock();
+        try {
+            return passengers.size();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public boolean isFull() {
+        return getLoad() >= capacity;
     }
 
     public void addTarget(int floor) {
@@ -186,12 +199,26 @@ public final class Elevator extends Thread {
         sleepSec(Config.FLOOR_TRAVEL_TIME);
         Logger.logLine("Местонахождение", "лифт", id, "этаж", curr);
     }
+    //проверяем, есть ли на этаже ожидающие заявки, которые подходят по направлению
+    private boolean isHallRequestCompatible(int floor, Direction elevatorDir) {
+        List<HallRequest> list = hallRequestsByFloor.get(floor);
+        if (list == null || list.isEmpty()) return false;
+
+        if (elevatorDir == Direction.IDLE) return true;
+
+        for (HallRequest r : list) {
+            if (r.direction == elevatorDir) return true;
+        }
+        return false;
+    }
 
     private boolean shouldStopHere(int floor) {
         lock.lock();
         try {
             if (state.targets.contains(floor)) return true;
-            return hallRequestsByFloor.containsKey(floor);
+
+            // по заявкам с этажа останавливаемся только если есть подходящее направление
+            return isHallRequestCompatible(floor, state.direction);
         } finally {
             lock.unlock();
         }
@@ -208,6 +235,7 @@ public final class Elevator extends Thread {
         } finally {
             lock.unlock();
         }
+        Logger.logLine("Прибытие", "лифт", id, "этаж", floor);
 
         Logger.logLine("Двери открыты", "лифт", id, "этаж", floor);
         sleepSec(Config.DOOR_OPEN_TIME);
@@ -225,12 +253,15 @@ public final class Elevator extends Thread {
 
             picked = new ArrayList<>();
             List<HallRequest> notPicked = new ArrayList<>();
-
-            for (int i = 0; i < waiting.size(); i++) {
-                if (i < canTake) picked.add(waiting.get(i));
-                else notPicked.add(waiting.get(i));
+            // направление лифта на момент открытия дверей
+            Direction elevatorDir = state.direction;
+            // сначала подбираем тех, кто совпадает по направлению или любых, если лифт стоит
+            for (HallRequest r : waiting) {
+                boolean ok = (elevatorDir == Direction.IDLE) || (r.direction == elevatorDir);
+                if (ok && picked.size() < canTake) picked.add(r);
+                else notPicked.add(r);
             }
-
+            // не вошедшие остаются ждать на этаже
             if (!notPicked.isEmpty()) {
                 hallRequestsByFloor.computeIfAbsent(floor, f -> new ArrayList<>()).addAll(notPicked);
             }

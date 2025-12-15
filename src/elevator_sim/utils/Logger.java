@@ -43,9 +43,9 @@ public final class Logger {
 
         // мапа для красивых подписей полей
         Map<String, String> LABELS = new LinkedHashMap<>();
-        LABELS.put("номер", "Номер");
+        LABELS.put("номер", "Запрос №");
         LABELS.put("этаж", "Этаж");
-        LABELS.put("лифт", "Лифт");
+        LABELS.put("лифт", "Лифт №");
         LABELS.put("напр", "Направление");
         LABELS.put("цель", "Цель");
         LABELS.put("пас", "Пассажир");
@@ -78,6 +78,10 @@ public final class Logger {
                     String vv = String.valueOf(vObj);
                     vv = DIR_RU.getOrDefault(vv, vv);
                     sj.add(title + ": " + vv);
+                } else if ("лифт".equals(k)) {
+                    sj.add(title + vObj);
+                } else if ("номер".equals(k)) {
+                    sj.add(title + vObj);
                 } else {
                     sj.add(title + ": " + vObj);
                 }
