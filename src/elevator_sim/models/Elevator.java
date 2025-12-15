@@ -3,7 +3,8 @@ import elevator_sim.Config;
 import elevator_sim.utils.Logger;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantLock;
-
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 public final class Elevator extends Thread {
 
     public final int id;
@@ -13,7 +14,9 @@ public final class Elevator extends Thread {
     private ElevatorState state;
     //кто сейчас внутри лифта
     private final Set<String> passengers = new HashSet<>();
-
+    // сигнал прибытия на этаж
+    // пассажиры ждут через waitForArrival()
+    private final Map<Integer, CompletableFuture<Void>> arrivalFutures = new ConcurrentHashMap<>();
     // этаж список внешних заявок люди ждут лифт на этаже
     private final Map<Integer, List<HallRequest>> hallRequestsByFloor = new HashMap<>();
     private final Object wakeMonitor = new Object();
@@ -47,7 +50,18 @@ public final class Elevator extends Thread {
         wakeUp();
     }
 
+    private CompletableFuture<Void> getArrivalFuture(int floor) {
+        return arrivalFutures.computeIfAbsent(floor, f -> new CompletableFuture<>());
+    }
 
+    public boolean waitForArrival(int floor, long timeoutMs) {
+        try {
+            getArrivalFuture(floor).get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
     public void registerHallRequest(HallRequest req) {
         lock.lock();
         try {
@@ -246,6 +260,10 @@ public final class Elevator extends Thread {
         } finally {
             lock.unlock();
         }
+
+        CompletableFuture<Void> f = getArrivalFuture(floor);
+        f.complete(null);
+        arrivalFutures.put(floor, new CompletableFuture<>());
 
         Logger.logLine("Двери закрываются", "лифт", id, "этаж", floor);
         sleepSec(Config.DOOR_CLOSE_TIME);
